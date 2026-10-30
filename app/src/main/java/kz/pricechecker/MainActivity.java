@@ -27,8 +27,6 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -36,10 +34,11 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-@SuppressWarnings("deprecation") // IntentIntegrator, onActivityResult — работают на всех версиях Android
+@SuppressWarnings("deprecation") // onActivityResult — работает на всех версиях Android
 public class MainActivity extends Activity {
     private static final int MENU_SETTINGS = 1;
     private static final int MENU_UPDATE = 2;
+    private static final int REQ_SCAN = 100;
     private static boolean autoUpdateDone = false;
 
     private final ExecutorService bg = Executors.newSingleThreadExecutor();
@@ -109,7 +108,41 @@ public class MainActivity extends Activity {
         findViewById(R.id.btnPlus).setOnClickListener(v -> setCopies(getCopies() + 1));
         btnPrint.setOnClickListener(v -> print());
 
+        showLastCrash();
         startupLoad();
+    }
+
+    /** Если приложение в прошлый раз закрылось с ошибкой — показать её текст (для передачи разработчику). */
+    private void showLastCrash() {
+        final java.io.File f = App.crashFile(this);
+        if (!f.exists()) return;
+        String text;
+        try {
+            text = new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            text = String.valueOf(e);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+        final String report = text;
+        TextView tv = new TextView(this);
+        tv.setText(report);
+        tv.setTextIsSelectable(true);
+        tv.setTextSize(11);
+        int pad = Math.round(16 * getResources().getDisplayMetrics().density);
+        tv.setPadding(pad, pad / 2, pad, 0);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("Приложение было закрыто из-за ошибки")
+                .setView(sv)
+                .setPositiveButton("Копировать текст", (d, w) -> {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Ошибка Прайс-чекер", report));
+                    Toast.makeText(this, "Текст ошибки скопирован", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Закрыть", null)
+                .show();
     }
 
     // ---------------- Загрузка прайса ----------------
@@ -286,23 +319,18 @@ public class MainActivity extends Activity {
     // ---------------- Сканер ----------------
 
     private void startScan() {
-        IntentIntegrator ii = new IntentIntegrator(this);
-        ii.setDesiredBarcodeFormats(IntentIntegrator.EAN_13, IntentIntegrator.EAN_8,
-                IntentIntegrator.UPC_A, IntentIntegrator.UPC_E,
-                IntentIntegrator.CODE_128, IntentIntegrator.CODE_39, IntentIntegrator.CODE_93,
-                IntentIntegrator.ITF, IntentIntegrator.QR_CODE, IntentIntegrator.DATA_MATRIX);
-        ii.setPrompt("Наведите камеру на штрихкод");
-        ii.setBeepEnabled(true);
-        ii.setOrientationLocked(false);
-        ii.initiateScan();
+        try {
+            startActivityForResult(new Intent(this, ScanActivity.class), REQ_SCAN);
+        } catch (Exception e) {
+            showError("Сканер недоступен", String.valueOf(e.getMessage()));
+        }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        IntentResult r = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (r != null) {
-            String code = r.getContents();
-            if (code != null) {
+        if (requestCode == REQ_SCAN) {
+            String code = resultCode == RESULT_OK && data != null ? data.getStringExtra(ScanActivity.EXTRA_CODE) : null;
+            if (code != null && !code.trim().isEmpty()) {
                 code = code.trim();
                 etSearch.setText(code, false);
                 etSearch.setSelection(etSearch.getText().length());
